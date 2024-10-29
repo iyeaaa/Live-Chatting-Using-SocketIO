@@ -15,30 +15,49 @@ app.get("/*", (req, res) => res.redirect("/"));
 const handleListen = () => console.log('Listening on http://localhost:3000');
 
 const httpServer = http.createServer(app);
-const wsServer = SocketIO(server);
+const wsServer = SocketIO(httpServer);
 
-const sockets = [];
+function getPublicRooms() {
+    let publicRooms = [];
+    const rooms = wsServer.sockets.adapter.rooms;
+    const sids = wsServer.sockets.adapter.sids;
 
-wss.on("connection", (socket) => {
-    sockets.push(socket);
-    socket["nickname"] = "Anon";
-
-    console.log("Connected to Browser ok")
-
-    socket.on("close", () => console.log("Disconnected from the Browser"));
-
-    socket.on("message", (msg) => { 
-        const message = JSON.parse(msg);
-
-        switch (message.type) {
-            case "new_message":
-                sockets.forEach(s => {
-                    s.send(`${socket.nickname}: ${message.payload}`)
-                });
-            case "nickname":
-                socket["nickname"] = message.payload;
-        }
+    rooms.forEach((_, key) => {
+        if (sids.get(key) === undefined)
+            publicRooms.push(key);
     });
+
+    return publicRooms;
+}
+
+wsServer.on("connection", socket => {
+    socket['nickname'] = 'Anon';
+    socket.emit("update_rooms", getPublicRooms());
+    socket.onAny((event) => {
+        console.log(`Socket Event: ${event}`);
+    });
+    socket.on("enter_room", (roomName, done) => {
+        socket.join(roomName);
+        done();
+        socket.to(roomName).emit("welcome", socket.nickname);
+        wsServer.emit("update_rooms", getPublicRooms());
+    });
+    socket.on("new_message", (msg, room, done) => {
+        socket.to(room).emit("new_message", `${socket.nickname}: ${msg}`);
+        done();
+    });
+    socket.on("nickname", (nickname, done) => {
+        socket['nickname'] = nickname;
+        done();
+    });
+    socket.on("disconnecting", () => {
+        socket.rooms.forEach(room => {
+            socket.to(room).emit("bye", socket.nickname);
+        });
+    });
+    socket.on("disconnect", () => {
+        wsServer.emit("update_rooms", getPublicRooms());
+    })
 });
 
 httpServer.listen(3000, handleListen);
